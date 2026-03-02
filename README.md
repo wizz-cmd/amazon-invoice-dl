@@ -37,14 +37,23 @@ playwright install chromium
 # Download current year's invoices (opens browser for login + 2FA)
 amazon-invoice-dl --email you@example.com --password 'hunter2'
 
-# Download a specific year
-amazon-invoice-dl --year 2024
+# Full year
+amazon-invoice-dl --period 2024
 
-# Download a range of years
-amazon-invoice-dl --start-year 2020
+# Single month
+amazon-invoice-dl --period 2024-11
 
-# Custom date range
-amazon-invoice-dl --date-range 20240101-20241231
+# Quarter
+amazon-invoice-dl --period 2024Q3
+
+# Half year
+amazon-invoice-dl --period 2024H1
+
+# Range of years
+amazon-invoice-dl --period 2023..2025
+
+# Month range
+amazon-invoice-dl --period 2024-06..2024-12
 
 # Custom output directory
 amazon-invoice-dl --output-dir ~/Documents/amazon-invoices
@@ -52,6 +61,9 @@ amazon-invoice-dl --output-dir ~/Documents/amazon-invoices
 # Headless mode (only works without 2FA)
 amazon-invoice-dl --headless
 ```
+
+> **Note:** The `--year`, `--start-year`, and `--date-range` flags still work but are deprecated.
+> Use `--period` instead.
 
 ### Credentials via environment / .env
 

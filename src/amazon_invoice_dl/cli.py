@@ -23,13 +23,18 @@ import re
 import sys
 import time
 import random
+import warnings
 from pathlib import Path
 from datetime import datetime
+
+from amazon_invoice_dl.period import PeriodParseError, parse_period
 
 try:
     from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 except ImportError:
-    print("ERROR: playwright not installed. Run: pip install playwright && playwright install chromium")
+    print(
+        "ERROR: playwright not installed. Run: pip install playwright && playwright install chromium"
+    )
     sys.exit(1)
 
 
@@ -52,27 +57,90 @@ def load_env_file():
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Amazon.de Invoice Downloader")
+    p = argparse.ArgumentParser(
+        description="Amazon.de Invoice Downloader",
+        epilog=(
+            "Period examples:\n"
+            "  --period 2024           full year\n"
+            "  --period 2024-11        single month\n"
+            "  --period 2024Q3         quarter\n"
+            "  --period 2024H1         half year\n"
+            "  --period 2023..2025     range of years\n"
+            "  --period 2024-06..2024-12  month range\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     p.add_argument("--email", default=os.environ.get("AMAZON_EMAIL", ""))
     p.add_argument("--password", default=os.environ.get("AMAZON_PASSWORD", ""))
-    p.add_argument("--year", type=int, default=None)
-    p.add_argument("--date-range", dest="date_range", default=None,
-                   help="YYYYMMDD-YYYYMMDD")
+    p.add_argument(
+        "--period",
+        "-p",
+        default=None,
+        help="Time period to download (e.g. 2024, 2024-11, 2024Q3, 2023..2025)",
+    )
+    # Deprecated flags — kept for backwards compatibility
+    p.add_argument("--year", type=int, default=None, help=argparse.SUPPRESS)
+    p.add_argument(
+        "--date-range", dest="date_range", default=None, help=argparse.SUPPRESS
+    )
+    p.add_argument(
+        "--start-year",
+        dest="start_year",
+        type=int,
+        default=None,
+        help=argparse.SUPPRESS,
+    )
     p.add_argument("--output-dir", dest="output_dir", default="./downloads")
-    p.add_argument("--headless", action="store_true", default=False,
-                   help="Run headless (default: visible browser for 2FA)")
-    p.add_argument("--start-year", dest="start_year", type=int, default=None,
-                   help="Download from this year to current year (batch mode)")
+    p.add_argument(
+        "--headless",
+        action="store_true",
+        default=False,
+        help="Run headless (default: visible browser for 2FA)",
+    )
     return p.parse_args()
 
 
-def get_date_range(args):
-    """Return (start_date, end_date) as strings YYYYMMDD."""
-    if args.date_range:
+def resolve_period(args):
+    """Resolve period from args, handling deprecated flags.
+
+    Returns a DateRange from the period module.
+    """
+    # New --period flag takes priority
+    if args.period is not None:
+        return parse_period(args.period)
+
+    # Deprecated flags with warnings
+    if args.start_year is not None:
+        warnings.warn(
+            "--start-year is deprecated, use --period instead "
+            f"(e.g. --period {args.start_year}..{datetime.now().year})",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return parse_period(f"{args.start_year}..{datetime.now().year}")
+
+    if args.date_range is not None:
+        warnings.warn(
+            "--date-range is deprecated, use --period instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        # Parse YYYYMMDD-YYYYMMDD into year/month ranges
         parts = args.date_range.split("-")
-        return parts[0], parts[1]
-    year = args.year or datetime.now().year
-    return f"{year}0101", f"{year}1231"
+        start_y, start_m = parts[0][:4], parts[0][4:6]
+        end_y, end_m = parts[1][:4], parts[1][4:6]
+        return parse_period(f"{start_y}-{start_m}..{end_y}-{end_m}")
+
+    if args.year is not None:
+        warnings.warn(
+            f"--year is deprecated, use --period instead (e.g. --period {args.year})",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return parse_period(str(args.year))
+
+    # Default: current year
+    return parse_period(None)
 
 
 def login(page, email, password):
@@ -113,7 +181,7 @@ def login(page, email, password):
             print(f"  [debug] URL: {url[:80]}")
 
             # Primary check: look for Amazon nav bar elements that only appear when logged in
-            nav = page.locator('#nav-link-accountList, #nav-orders, #nav-item-signout')
+            nav = page.locator("#nav-link-accountList, #nav-orders, #nav-item-signout")
             if nav.first.is_visible(timeout=2000):
                 print("✅ Login successful")
                 return True
@@ -157,7 +225,7 @@ def scrape_orders_for_year(page, year):
             break
 
         # Find order IDs in the page HTML (most reliable method)
-        order_ids_on_page = list(set(re.findall(r'(\d{3}-\d{7}-\d{7})', page_text)))
+        order_ids_on_page = list(set(re.findall(r"(\d{3}-\d{7}-\d{7})", page_text)))
 
         # Filter out any IDs we already have
         existing_ids = {o["id"] for o in orders}
@@ -177,9 +245,18 @@ def scrape_orders_for_year(page, year):
             pass
 
         months_de = {
-            "Januar": "01", "Februar": "02", "März": "03", "April": "04",
-            "Mai": "05", "Juni": "06", "Juli": "07", "August": "08",
-            "September": "09", "Oktober": "10", "November": "11", "Dezember": "12"
+            "Januar": "01",
+            "Februar": "02",
+            "März": "03",
+            "April": "04",
+            "Mai": "05",
+            "Juni": "06",
+            "Juli": "07",
+            "August": "08",
+            "September": "09",
+            "Oktober": "10",
+            "November": "11",
+            "Dezember": "12",
         }
 
         for oid in new_ids:
@@ -192,12 +269,12 @@ def scrape_orders_for_year(page, year):
             idx = body_text.find(oid)
             if idx > 0:
                 # Look backwards ~500 chars for date and price
-                chunk = body_text[max(0, idx - 500):idx + 100]
+                chunk = body_text[max(0, idx - 500) : idx + 100]
 
                 # Date: "22. Februar 2026" or "3. Mai 2024"
                 date_matches = re.findall(
-                    r'(\d{1,2})\.\s*(Januar|Februar|März|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember)\s*(\d{4})',
-                    chunk
+                    r"(\d{1,2})\.\s*(Januar|Februar|März|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember)\s*(\d{4})",
+                    chunk,
                 )
                 if date_matches:
                     last = date_matches[-1]  # closest to order ID
@@ -207,15 +284,17 @@ def scrape_orders_for_year(page, year):
                     order_date = f"{yr}{month}{day}"
 
                 # Total: "18,74 €" or "EUR 18,74"
-                total_matches = re.findall(r'(\d+[.,]\d{2})\s*€', chunk)
+                total_matches = re.findall(r"(\d+[.,]\d{2})\s*€", chunk)
                 if total_matches:
                     total = total_matches[-1].replace(",", "_").replace(".", "_")
 
-            orders.append({
-                "id": oid,
-                "date": order_date,
-                "total": total,
-            })
+            orders.append(
+                {
+                    "id": oid,
+                    "date": order_date,
+                    "total": total,
+                }
+            )
 
         # Amazon.de shows 10 orders per page
         start_index += 10
@@ -257,7 +336,9 @@ def download_invoice(page, order, output_dir):
             human_delay(1, 2)
 
             # Look for "Rechnung" link
-            invoice_link = page.locator('a:has-text("Rechnung"), a[href*="invoice"], a:has-text("Invoice")')
+            invoice_link = page.locator(
+                'a:has-text("Rechnung"), a[href*="invoice"], a:has-text("Invoice")'
+            )
             if invoice_link.count() > 0:
                 invoice_link.first.click()
                 human_delay(1, 2)
@@ -284,18 +365,21 @@ def main():
     password = args.password or os.environ.get("AMAZON_PASSWORD", "")
 
     if not email or not password:
-        print("❌ Credentials required. Set AMAZON_EMAIL + AMAZON_PASSWORD or use --email/--password")
+        print(
+            "❌ Credentials required. Set AMAZON_EMAIL + AMAZON_PASSWORD or use --email/--password"
+        )
         sys.exit(1)
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    start_date, end_date = get_date_range(args)
-    if args.start_year:
-        start_date = f"{args.start_year}0101"
-        end_date = f"{datetime.now().year}1231"
+    try:
+        date_range = resolve_period(args)
+    except PeriodParseError as e:
+        print(f"❌ Invalid period: {e}")
+        sys.exit(1)
 
-    years = list(range(int(start_date[:4]), int(end_date[:4]) + 1))
+    years = date_range.years
 
     print(f"🛒 Amazon.de Invoice Downloader")
     print(f"   Years: {years}")
@@ -307,7 +391,7 @@ def main():
             headless=args.headless,
             args=[
                 "--disable-blink-features=AutomationControlled",
-            ]
+            ],
         )
         context = browser.new_context(
             locale="de-DE",
@@ -335,14 +419,17 @@ def main():
                 human_delay(0.8, 2.0)
                 result = download_invoice(page, order, output_dir)
                 if result:
-                    if (output_dir / f"{order['date']}_{order['total']}_amazon_{order['id']}.pdf").stat().st_size > 0:
+                    if (
+                        output_dir
+                        / f"{order['date']}_{order['total']}_amazon_{order['id']}.pdf"
+                    ).stat().st_size > 0:
                         total_downloaded += 1
                     else:
                         total_skipped += 1
                 else:
                     total_failed += 1
 
-        print(f"\n{'='*50}")
+        print(f"\n{'=' * 50}")
         print(f"📊 Ergebnis:")
         print(f"   ✅ Heruntergeladen: {total_downloaded}")
         print(f"   ⏭️  Übersprungen:   {total_skipped}")
