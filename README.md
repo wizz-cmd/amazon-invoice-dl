@@ -6,20 +6,28 @@ Uses Playwright (Chromium) with human-like delays and stealth mode. Supports 2FA
 
 ## Installation
 
-```bash
-# Clone and install
-git clone https://github.com/wizz-cmd/amazon-invoice-dl.git
-cd amazon-invoice-dl
-pip install .
+### macOS (recommended)
 
-# Install the browser (one-time)
+```bash
+brew install pipx
+pipx install git+https://github.com/wizz-cmd/amazon-invoice-dl.git
+pipx ensurepath   # add ~/.local/bin to PATH, then restart your shell
 playwright install chromium
 ```
 
-Or install directly from GitHub:
+### Linux
 
 ```bash
-pip install git+https://github.com/wizz-cmd/amazon-invoice-dl.git
+pip install --user git+https://github.com/wizz-cmd/amazon-invoice-dl.git
+playwright install chromium
+```
+
+### From source
+
+```bash
+git clone https://github.com/wizz-cmd/amazon-invoice-dl.git
+cd amazon-invoice-dl
+pip install .    # or: pipx install .
 playwright install chromium
 ```
 
