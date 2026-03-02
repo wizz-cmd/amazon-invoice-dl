@@ -27,6 +27,8 @@ import warnings
 from pathlib import Path
 from datetime import date, datetime
 
+from tqdm import tqdm
+
 from amazon_invoice_dl.period import PeriodParseError, parse_period
 
 try:
@@ -312,7 +314,7 @@ def scrape_orders_for_year(page, year):
     return orders
 
 
-def download_invoice(page, order, output_dir):
+def download_invoice(page, order, output_dir, log=print):
     """Download the invoice PDF for a single order."""
     order_id = order["id"]
     date = order["date"]
@@ -321,8 +323,8 @@ def download_invoice(page, order, output_dir):
     filepath = output_dir / filename
 
     if filepath.exists():
-        print(f"  ⏭️  Skip (exists): {filename}")
-        return True
+        log(f"  ⏭️  Skip (exists): {filename}")
+        return "skipped"
 
     # Navigate to order detail / invoice page
     invoice_url = f"https://www.amazon.de/gp/css/summary/print.html/ref=ppx_yo_dt_b_invoice_o00?ie=UTF8&orderID={order_id}"
@@ -335,8 +337,8 @@ def download_invoice(page, order, output_dir):
         if "Rechnung" in body_text or "Invoice" in body_text or order_id in body_text:
             # Print to PDF
             page.pdf(path=str(filepath), format="A4", print_background=True)
-            print(f"  ✅ {filename}")
-            return True
+            log(f"  ✅ {filename}")
+            return "downloaded"
         else:
             # Try the invoice link from order details
             order_url = f"https://www.amazon.de/gp/your-account/order-details/ref=ppx_yo_dt_b_order_details_o00?ie=UTF8&orderID={order_id}"
@@ -351,18 +353,18 @@ def download_invoice(page, order, output_dir):
                 invoice_link.first.click()
                 human_delay(1, 2)
                 page.pdf(path=str(filepath), format="A4", print_background=True)
-                print(f"  ✅ {filename} (via order details)")
-                return True
+                log(f"  ✅ {filename} (via order details)")
+                return "downloaded"
             else:
-                print(f"  ⚠️  No invoice link found for {order_id}")
-                return False
+                log(f"  ⚠️  No invoice link found for {order_id}")
+                return "failed"
 
     except PWTimeout:
-        print(f"  ❌ Timeout for {order_id}")
-        return False
+        log(f"  ❌ Timeout for {order_id}")
+        return "failed"
     except Exception as e:
-        print(f"  ❌ Error for {order_id}: {e}")
-        return False
+        log(f"  ❌ Error for {order_id}: {e}")
+        return "failed"
 
 
 def main():
@@ -418,37 +420,41 @@ def main():
             browser.close()
             sys.exit(1)
 
+        # Collect all orders across all years, then download with progress bar
+        all_orders = []
+        for year in years:
+            all_orders.extend(scrape_orders_for_year(page, year))
+
+        # Filter by actual period date range
+        to_download = []
+        for order in all_orders:
+            try:
+                od = date(
+                    int(order["date"][:4]),
+                    int(order["date"][4:6]),
+                    int(order["date"][6:8]),
+                )
+                if od < date_range.start or od > date_range.end:
+                    print(f"  ⏭️  Skip (outside period): {order['id']} ({od})")
+                    continue
+            except (ValueError, IndexError):
+                pass  # if date can't be parsed, download anyway
+            to_download.append(order)
+
         total_downloaded = 0
         total_skipped = 0
         total_failed = 0
 
-        for year in years:
-            orders = scrape_orders_for_year(page, year)
-            for order in orders:
-                # Filter by actual period date range
-                try:
-                    od = date(
-                        int(order["date"][:4]),
-                        int(order["date"][4:6]),
-                        int(order["date"][6:8]),
-                    )
-                    if od < date_range.start or od > date_range.end:
-                        print(
-                            f"  ⏭️  Skip (outside period): {order['id']} ({od})"
-                        )
-                        continue
-                except (ValueError, IndexError):
-                    pass  # if date can't be parsed, download anyway
+        print()
+        with tqdm(to_download, unit="Rechnung", desc="⬇️  Herunterladen") as bar:
+            for order in bar:
+                bar.set_postfix_str(order["id"])
                 human_delay(0.8, 2.0)
-                result = download_invoice(page, order, output_dir)
-                if result:
-                    if (
-                        output_dir
-                        / f"{order['date']}_{order['total']}_amazon_{order['id']}.pdf"
-                    ).stat().st_size > 0:
-                        total_downloaded += 1
-                    else:
-                        total_skipped += 1
+                result = download_invoice(page, order, output_dir, log=tqdm.write)
+                if result == "downloaded":
+                    total_downloaded += 1
+                elif result == "skipped":
+                    total_skipped += 1
                 else:
                     total_failed += 1
 

@@ -23,6 +23,7 @@ classifiers = [
 ]
 dependencies = [
     "playwright>=1.40",
+    "tqdm>=4.0",
 ]
 
 [project.optional-dependencies]
