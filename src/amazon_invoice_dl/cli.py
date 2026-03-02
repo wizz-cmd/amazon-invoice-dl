@@ -25,7 +25,7 @@ import time
 import random
 import warnings
 from pathlib import Path
-from datetime import datetime
+from datetime import date, datetime
 
 from amazon_invoice_dl.period import PeriodParseError, parse_period
 
@@ -214,7 +214,15 @@ def scrape_orders_for_year(page, year):
         page_num += 1
         url = f"https://www.amazon.de/your-orders/orders?timeFilter=year-{year}&startIndex={start_index}"
         print(f"  Page {page_num} (startIndex={start_index})...")
-        page.goto(url)
+        try:
+            page.goto(url, timeout=60000)
+        except PWTimeout:
+            print(f"  ⚠️  Timeout loading page {page_num}, retrying once...")
+            try:
+                page.goto(url, timeout=60000)
+            except PWTimeout:
+                print(f"  ❌ Retry failed, assuming no more pages.")
+                break
         human_delay(2, 4)
 
         # Get the full page text and extract all order IDs via regex
@@ -319,7 +327,7 @@ def download_invoice(page, order, output_dir):
     # Navigate to order detail / invoice page
     invoice_url = f"https://www.amazon.de/gp/css/summary/print.html/ref=ppx_yo_dt_b_invoice_o00?ie=UTF8&orderID={order_id}"
     try:
-        page.goto(invoice_url, timeout=15000)
+        page.goto(invoice_url, timeout=60000)
         human_delay(1.5, 3)
 
         # Check if we got an actual invoice page
@@ -332,7 +340,7 @@ def download_invoice(page, order, output_dir):
         else:
             # Try the invoice link from order details
             order_url = f"https://www.amazon.de/gp/your-account/order-details/ref=ppx_yo_dt_b_order_details_o00?ie=UTF8&orderID={order_id}"
-            page.goto(order_url, timeout=15000)
+            page.goto(order_url, timeout=60000)
             human_delay(1, 2)
 
             # Look for "Rechnung" link
@@ -382,6 +390,7 @@ def main():
     years = date_range.years
 
     print(f"🛒 Amazon.de Invoice Downloader")
+    print(f"   Period: {date_range.start} to {date_range.end}")
     print(f"   Years: {years}")
     print(f"   Output: {output_dir.resolve()}")
     print()
@@ -416,6 +425,20 @@ def main():
         for year in years:
             orders = scrape_orders_for_year(page, year)
             for order in orders:
+                # Filter by actual period date range
+                try:
+                    od = date(
+                        int(order["date"][:4]),
+                        int(order["date"][4:6]),
+                        int(order["date"][6:8]),
+                    )
+                    if od < date_range.start or od > date_range.end:
+                        print(
+                            f"  ⏭️  Skip (outside period): {order['id']} ({od})"
+                        )
+                        continue
+                except (ValueError, IndexError):
+                    pass  # if date can't be parsed, download anyway
                 human_delay(0.8, 2.0)
                 result = download_invoice(page, order, output_dir)
                 if result:
